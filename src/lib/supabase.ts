@@ -93,24 +93,23 @@ let _client: SupabaseClient<Database> | null = null;
 
 export function getSupabaseClient(): SupabaseClient<Database> {
   if (_client) return _client;
-
-  _client = createClient<Database>(SUPABASE_URL, SUPABASE_ANON, {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: true,
-      storage: window.localStorage,
-    },
-    global: {
-      headers: {
-        'x-wag-client': 'wag-web-v2',
+  if (!SUPABASE_URL || !SUPABASE_ANON) {
+    console.warn('[WAG] Supabase not configured');
+    return {} as SupabaseClient<Database>;
+  }
+  try {
+    _client = createClient<Database>(SUPABASE_URL, SUPABASE_ANON, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        storage: window.localStorage,
       },
-    },
-    db: {
-      schema: 'public',
-    },
-  });
-
+    });
+  } catch (e) {
+    console.error('[WAG] Supabase init failed:', e);
+    return {} as SupabaseClient<Database>;
+  }
   return _client;
 }
 
