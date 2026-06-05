@@ -1,6 +1,7 @@
 // src/features/admin/DisbursementApproval.tsx
 // WAG ENTERPRISES — Admin Disbursement Approval
-
+import { db } from '../../lib/supabase';
+import { getAuditActionColor } from '../../lib/audit';
 import React, { useState, useEffect, useCallback } from 'react';
 import { getAllPendingDisbursements, approveDisbursement, rejectDisbursement } from '../../lib/disbursement';
 import { fmt, fmtDate } from '../../utils/helpers';
@@ -120,7 +121,6 @@ export function FraudMonitor({ onRefresh }: { onRefresh: () => void }) {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState('');
 
-  const { db: _db } = { db: require('../../lib/supabase').db };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -201,8 +201,6 @@ export function AuditLogs() {
     const q = search.toLowerCase();
     return !q || l.description?.toLowerCase().includes(q) || l.action?.toLowerCase().includes(q) || l.user_role?.toLowerCase().includes(q);
   });
-
-  const { getAuditActionColor } = require('../../lib/audit');
 
   return (
     <div>
