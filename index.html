@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>WAG Enterprises</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231a1a2e'/><text x='16' y='23' text-anchor='middle' font-size='20' font-weight='800' font-family='system-ui' fill='white'>W</text></svg>"/>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f4f8;min-height:100vh}
+    #root{min-height:100vh}
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+  // ── CONFIG ─────────────────────────────────────────────
+  // PASTE YOUR SUPABASE VALUES HERE:
+  const SUPABASE_URL  = 'YOUR_SUPABASE_URL_HERE';
+  const SUPABASE_ANON = 'YOUR_SUPABASE_ANON_KEY_HERE';
+  // ───────────────────────────────────────────────────────
+
+  const { createClient } = supabase;
+  const { createElement: h, useState, useEffect, useCallback, useRef } = React;
+  const db = (SUPABASE_URL && !SUPABASE_URL.includes('YOUR_'))
+    ? createClient(SUPABASE_URL, SUPABASE_ANON)
+    : null;
+
+  // ── HELPERS ──────────────────────────────────────────
+  const fmt = n => '₦' + Number(n||0).toLocaleString('en-NG',{minimumFractionDigits:2});
+  const fmtDate = d => d ? new Date(d).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'}) : '—';
+  const fmtPhone = p => (p||'').replace(/^\+234/,'0');
+  const normPhone = r => { const n=(r||'').replace(/\D/g,''); return n.length===11&&n[0]==='0'?'+234'+n.slice(1):'+234'+n; };
+  const genRef = () => 'WAG-TX-'+Math.floor(10000+Math.random()*90000);
+
+  async function hashPin(pin) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin));
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  }
+
+  // ── SESSION ──────────────────────────────────────────
+  const SESSION_KEY = 'wag_session_v2';
+  const getSession = () => { try{ const r=sessionStorage.getItem(SESSION_KEY); if(!r)return null; const p=JSON.parse(r); return p.user_id&&p.role?p:null; }catch{return null;} };
+  const saveSession = s => sessionStorage.setItem(SESSION_KEY,JSON.stringify(s));
+  const clearSess  = () => sessionStorage.removeItem(SESSION_KEY);
+
+  // ── STYLES ──────────────────────────────────────────
+  const S = {
+    page: {minHeight:'100vh',background:'linear-gradient(135deg,#1a1a2e 0%,#16213e 100%)',display:'flex',alignItems:'center',justifyContent:'center',padding:20},
+    card: {background:'#fff',borderRadius:20,padding:'36px 32px',width:'100%',maxWidth:420,boxShadow:'0 20px 80px rgba(0,0,0,0.4)'},
+    input: {width:'100%',padding:'12px 14px',border:'1px solid #e2e8f0',borderRadius:8,fontSize:15,outline:'none',boxSizing:'border-box',background:'#f8fafc',color:'#1a1a2e'},
+    btn: (c='#1a1a2e',tc='#fff') => ({width:'100%',padding:14,background:c,color:tc,border:'none',borderRadius:10,fontSize:15,fontWeight:700,cursor:'pointer'}),
+    err: {background:'#fef2f2',color:'#dc2626',padding:'10px 14px',borderRadius:8,fontSize:13,marginBottom:14,border:'1px solid #fecaca'},
+    label: {display:'block',fontSize:13,fontWeight:600,color:'#374151',marginBottom:6},
+    pill: (active) => ({padding:'8px 0',border:'none',borderRadius:8,cursor:'pointer',fontWeight:600,fontSize:12,background:active?'#1a1a2e':'transparent',color:active?'#fff':'#64748b'}),
+  };
+
+  // ═══════════════════════════════════════════════════
+  // AUTH SCREENS
+  // ═══════════════════════════════════════════════════
+  function Login({onLogin}) {
+    const [tab, setTab] = useState('customer');
+    const [phone, setPhone] = useState('');
+    const [repId, setRepId] = useState('');
+    const [pin, setPin]     = useState('');
+    const [err, setErr]     = useState('');
+    const [loading, setLoading] = useState(false);
+    const [showPin, setShowPin] = useState(false);
+
+    async function submit(e) {
+      e.preventDefault();
+      setErr(''); setLoading(true);
+      try {
+        if (!db) { setErr('Supabase not configured. Paste your URL and key into index.html.'); return; }
+        const pinHash = await hashPin(pin);
+        if (tab==='customer') {
+          const norm = normPhone(phone);
+          const {data,error} = await db.from('customers').select('id,first_name,last_name,phone,email,is_active').eq('phone',norm).eq('pin_hash',pinHash).single();
+          if (error||!data) { setErr('Invalid phone or PIN.'); return; }
+          if (!data.is_active) { setErr('Account inactive.'); return; }
+          saveSession({user_id:data.id,role:'customer',profile:{...data,role:'customer'},pin_verified:true});
+          onLogin();
+        } else if (tab==='representative') {
+          const {data,error} = await db.from('representatives').select('id,first_name,last_name,phone,email,rep_id,confirmed_count,is_active').eq('rep_id',repId.trim()).eq('pin_hash',pinHash).single();
+          if (error||!data) { setErr('Invalid Agent ID or PIN.'); return; }
+          if (!data.is_active) { setErr('Account deactivated.'); return; }
+          saveSession({user_id:data.id,role:'representative',profile:{...data,role:'representative'},pin_verified:true});
+          onLogin();
+        } else {
+          // Admin - calls edge function
+          const {data,error} = await db.functions.invoke('verify-admin-pin',{body:{pin}});
+          if (error||!data?.valid) { setErr('Invalid admin PIN.'); return; }
+          saveSession({user_id:'admin',role:'admin',profile:data.admin,pin_verified:true});
+          onLogin();
+        }
+      } catch(e) { setErr(e.message||'Login failed.'); }
+      finally { setLoading(false); setPin(''); }
+    }
+
+    const tabs = [{k:'customer',label:'👤 Customer'},{k:'representative',label:'🧑‍💼 Rep'},{k:'admin',label:'⚙️ Admin'}];
+
+    return h('div',{style:S.page},
+      h('div',{style:S.card},
+        h('div',{style:{textAlign:'center',marginBottom:24}},
+          h('div',{style:{width:56,height:56,background:'linear-gradient(135deg,#1a1a2e,#4a4a8a)',borderRadius:14,display:'inline-flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:22,fontWeight:800,marginBottom:10}},'W'),
+          h('h1',{style:{margin:0,fontSize:22,fontWeight:800,color:'#1a1a2e'}},'WAG Enterprises'),
+          h('p',{style:{margin:'4px 0 0',color:'#64748b',fontSize:13}},'Thrift Collection Platform')
+        ),
+        h('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,1fr)',background:'#f1f5f9',borderRadius:10,padding:4,marginBottom:24,gap:4}},
+          tabs.map(t=>h('button',{key:t.k,onClick:()=>setTab(t.k),style:S.pill(tab===t.k)},t.label))
+        ),
+        h('form',{onSubmit:submit},
+          tab==='customer'&&h('div',{style:{marginBottom:16}},
+            h('label',{style:S.label},'Phone Number'),
+            h('input',{type:'tel',value:phone,onChange:e=>setPhone(e.target.value),placeholder:'07012345678',style:S.input,autoComplete:'tel'})
+          ),
+          tab==='representative'&&h('div',{style:{marginBottom:16}},
+            h('label',{style:S.label},'Agent ID'),
+            h('input',{type:'text',value:repId,onChange:e=>setRepId(e.target.value.replace(/\D/g,'')),placeholder:'6-digit Agent ID',style:S.input,maxLength:6})
+          ),
+          h('div',{style:{marginBottom:20}},
+            h('label',{style:S.label},'PIN'),
+            h('div',{style:{position:'relative'}},
+              h('input',{type:showPin?'text':'password',value:pin,onChange:e=>setPin(e.target.value.replace(/\D/g,'').slice(0,8)),placeholder:'Enter PIN',style:{...S.input,paddingRight:44},inputMode:'numeric'}),
+              h('button',{type:'button',onClick:()=>setShowPin(v=>!v),style:{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',fontSize:16,color:'#94a3b8'}},showPin?'🙈':'👁️')
+            )
+          ),
+          err&&h('div',{style:S.err},err),
+          h('button',{type:'submit',disabled:loading,style:S.btn(loading?'#94a3b8':'#1a1a2e')},loading?'Signing in…':'Sign In'),
+          tab==='customer'&&h('p',{style:{textAlign:'center',marginTop:16,fontSize:13,color:'#64748b'}},
+            'New customer? ',
+            h('button',{type:'button',onClick:()=>window.dispatchEvent(new CustomEvent('wag:register')),style:{background:'none',border:'none',color:'#1a1a2e',fontWeight:600,cursor:'pointer',textDecoration:'underline'}},'Create account')
+          ),
+          tab==='representative'&&h('p',{style:{textAlign:'center',marginTop:16,fontSize:13,color:'#64748b'}},
+            'New rep? ',
+            h('button',{type:'button',onClick:()=>window.dispatchEvent(new CustomEvent('wag:rep-register')),style:{background:'none',border:'none',color:'#1a1a2e',fontWeight:600,cursor:'pointer',textDecoration:'underline'}},'Register with token')
+          )
+        )
+      )
+    );
+  }
+
+  function Register({onBack,onSuccess}) {
+    const [f,setF] = useState({first_name:'',last_name:'',phone:'',email:'',pin:'',confirm_pin:''});
+    const [err,setErr] = useState('');
+    const [loading,setLoading] = useState(false);
+    const set = (k,v) => setF(p=>({...p,[k]:v}));
+
+    async function submit(e) {
+      e.preventDefault(); setErr('');
+      if(!f.first_name||!f.last_name) return setErr('Name required.');
+      if(!f.phone) return setErr('Phone required.');
+      if(f.pin.length<4) return setErr('PIN must be at least 4 digits.');
+      if(f.pin!==f.confirm_pin) return setErr('PINs do not match.');
+      if(!db) return setErr('Supabase not configured.');
+      setLoading(true);
+      try {
+        const norm = normPhone(f.phone);
+        const {data:ex} = await db.from('customers').select('id').eq('phone',norm).limit(1);
+        if(ex&&ex.length>0) return setErr('Phone already registered.');
+        const pinHash = await hashPin(f.pin);
+        const {error} = await db.from('customers').insert({first_name:f.first_name.trim(),last_name:f.last_name.trim(),phone:norm,email:f.email.trim().toLowerCase()||'',address:'',pin_hash:pinHash,is_active:true,kyc_status:'pending'});
+        if(error) return setErr(error.message);
+        onSuccess();
+      } catch(e){setErr(e.message);}
+      finally{setLoading(false);}
+    }
+
+    return h('div',{style:S.page},
+      h('div',{style:S.card},
+        h('h2',{style:{fontSize:22,fontWeight:800,color:'#1a1a2e',marginBottom:20,textAlign:'center'}},'Create Account'),
+        h('form',{onSubmit:submit},
+          h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}},
+            h('div',null,h('label',{style:S.label},'First Name'),h('input',{value:f.first_name,onChange:e=>set('first_name',e.target.value),style:S.input,placeholder:'Adaeze'})),
+            h('div',null,h('label',{style:S.label},'Last Name'),h('input',{value:f.last_name,onChange:e=>set('last_name',e.target.value),style:S.input,placeholder:'Okafor'}))
+          ),
+          h('div',{style:{marginBottom:12}},h('label',{style:S.label},'Phone *'),h('input',{type:'tel',value:f.phone,onChange:e=>set('phone',e.target.value),style:S.input,placeholder:'07012345678'})),
+          h('div',{style:{marginBottom:12}},h('label',{style:S.label},'Email (optional)'),h('input',{type:'email',value:f.email,onChange:e=>set('email',e.target.value),style:S.input,placeholder:'email@example.com'})),
+          h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:14}},
+            h('div',null,h('label',{style:S.label},'PIN *'),h('input',{type:'password',value:f.pin,onChange:e=>set('pin',e.target.value.replace(/\D/g,'').slice(0,8)),style:S.input,placeholder:'4-8 digits',inputMode:'numeric'})),
+            h('div',null,h('label',{style:S.label},'Confirm PIN *'),h('input',{type:'password',value:f.confirm_pin,onChange:e=>set('confirm_pin',e.target.value.replace(/\D/g,'').slice(0,8)),style:S.input,placeholder:'Repeat PIN',inputMode:'numeric'}))
+          ),
+          err&&h('div',{style:S.err},err),
+          h('button',{type:'submit',disabled:loading,style:S.btn(loading?'#94a3b8':'#1a1a2e')},loading?'Creating…':'Create Account'),
+          h('p',{style:{textAlign:'center',marginTop:14,fontSize:13,color:'#64748b'}},
+            'Already registered? ',h('button',{type:'button',onClick:onBack,style:{background:'none',border:'none',color:'#1a1a2e',fontWeight:600,cursor:'pointer',textDecoration:'underline'}},'Sign in')
+          )
+        )
+      )
+    );
+  }
+
+  // ═══════════════════════════════════════════════════
+  // CUSTOMER DASHBOARD
+  // ═══════════════════════════════════════════════════
+  function CustomerDashboard({profile,onLogout}) {
+    const [plans,setPlans]       = useState([]);
+    const [tab,setTab]           = useState('plans');
+    const [loading,setLoading]   = useState(true);
+    const [showNew,setShowNew]   = useState(false);
+    const [txs,setTxs]           = useState([]);
+    const [disbursements,setDisb]= useState([]);
+
+    const loadPlans = useCallback(async()=>{
+      if(!db)return;
+      const {data}=await db.from('plan_balances').select('*').eq('customer_id',profile.id).neq('status','deleted').order('created_at',{ascending:true});
+      setPlans(data||[]);
+      setLoading(false);
+    },[profile.id]);
+
+    const loadTxs = useCallback(async()=>{
+      if(!db)return;
+      const {data}=await db.from('transactions').select('*').eq('customer_id',profile.id).order('created_at',{ascending:false}).limit(100);
+      setTxs(data||[]);
+    },[profile.id]);
+
+    const loadDisb = useCallback(async()=>{
+      if(!db)return;
+      const {data}=await db.from('disbursements').select('*').eq('customer_id',profile.id).order('requested_at',{ascending:false});
+      setDisb(data||[]);
+    },[profile.id]);
+
+    useEffect(()=>{loadPlans();},[loadPlans]);
+    useEffect(()=>{ if(tab==='transactions')loadTxs(); if(tab==='payouts')loadDisb(); },[tab,loadTxs,loadDisb]);
+
+    const totalBal = plans.reduce((s,p)=>s+Number(p.balance||0),0);
+    const init = profile.first_name.charAt(0).toUpperCase();
+
+    return h('div',{style:{minHeight:'100vh',background:'#f0f4f8',fontFamily:'system-ui,sans-serif'}},
+      // Header
+      h('div',{style:{background:'linear-gradient(135deg,#1a1a2e,#16213e)',padding:'20px 20px 0',color:'#fff'}},
+        h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}},
+          h('div',{style:{display:'flex',alignItems:'center',gap:12}},
+            h('div',{style:{width:44,height:44,background:'rgba(255,255,255,0.15)',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,fontWeight:700}},init),
+            h('div',null,
+              h('div',{style:{fontSize:16,fontWeight:700}},profile.first_name+' '+profile.last_name),
+              h('div',{style:{fontSize:12,opacity:0.7}},fmtPhone(profile.phone))
+            )
+          ),
+          h('button',{onClick:onLogout,style:{background:'rgba(255,255,255,0.1)',border:'none',color:'#fff',width:36,height:36,borderRadius:'50%',cursor:'pointer',fontSize:16}},'🚪')
+        ),
+        h('div',{style:{background:'rgba(255,255,255,0.1)',borderRadius:16,padding:'16px 20px',marginBottom:20}},
+          h('div',{style:{fontSize:13,opacity:0.8,marginBottom:4}},'Total Savings'),
+          h('div',{style:{fontSize:30,fontWeight:800}},fmt(totalBal)),
+          h('div',{style:{fontSize:12,opacity:0.7,marginTop:4}},plans.filter(p=>p.status==='active').length+' active plan(s)')
+        ),
+        h('div',{style:{display:'flex',gap:4}},
+          [['plans','🏦','Plans'],['transactions','📋','History'],['payouts','💸','Payouts'],['profile','👤','Profile']].map(([t,icon,label])=>
+            h('button',{key:t,onClick:()=>setTab(t),style:{padding:'10px 14px',border:'none',cursor:'pointer',fontWeight:600,fontSize:12,borderRadius:'8px 8px 0 0',background:tab===t?'#fff':'transparent',color:tab===t?'#1a1a2e':'rgba(255,255,255,0.75)'}},icon+' '+label)
+          )
+        )
+      ),
+      // Content
+      h('div',{style:{padding:20}},
+        tab==='plans'&&h('div',null,
+          h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}},
+            h('h2',{style:{margin:0,fontSize:18,fontWeight:700,color:'#1a1a2e'}},'My Plans'),
+            h('button',{onClick:()=>setShowNew(true),style:{padding:'8px 16px',background:'#1a1a2e',color:'#fff',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:13}},'+ New Plan')
+          ),
+          loading?h('p',{style:{textAlign:'center',color:'#94a3b8',padding:40}},'Loading…'):
+          plans.length===0?h('div',{style:{background:'#fff',borderRadius:16,padding:40,textAlign:'center',color:'#94a3b8'}},
+            h('div',{style:{fontSize:48,marginBottom:12}},'🏦'),
+            h('p',{style:{fontWeight:600,color:'#475569'}},'No plans yet'),
+            h('p',{style:{fontSize:13}},'Create your first savings plan')
+          ):
+          h('div',{style:{display:'grid',gap:14}},plans.filter(p=>p.status!=='deleted').map(p=>{
+            const bal=Number(p.balance||0),tgt=Number(p.target_amount||1),pct=Math.min(100,Math.round(bal/tgt*100));
+            return h('div',{key:p.plan_id,style:{background:'#fff',borderRadius:16,padding:20,boxShadow:'0 2px 12px rgba(0,0,0,0.06)'}},
+              h('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:12}},
+                h('div',null,
+                  h('div',{style:{fontWeight:700,fontSize:16,color:'#1a1a2e'}},p.name),
+                  h('div',{style:{fontSize:12,color:'#64748b',marginTop:2}},p.frequency+' · Due '+fmtDate(p.maturity_date))
+                ),
+                h('span',{style:{background:'#dcfce7',color:'#059669',padding:'3px 10px',borderRadius:20,fontSize:11,fontWeight:600,alignSelf:'flex-start'}},p.status)
+              ),
+              h('div',{style:{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:8}},
+                h('span',{style:{color:'#64748b'}},'Balance'),
+                h('span',{style:{fontWeight:700,color:'#1a1a2e'}},fmt(bal))
+              ),
+              h('div',{style:{display:'flex',justifyContent:'space-between',fontSize:12,color:'#94a3b8',marginBottom:8}},
+                h('span','Target: '+fmt(tgt)),h('span',pct+'%')
+              ),
+              h('div',{style:{height:6,background:'#f1f5f9',borderRadius:3}},
+                h('div',{style:{height:'100%',borderRadius:3,width:pct+'%',background:pct>=100?'#059669':'#2563eb'}})
+              )
+            );
+          }))
+        ),
+        tab==='transactions'&&h('div',null,
+          h('h2',{style:{margin:'0 0 16px',fontSize:18,fontWeight:700,color:'#1a1a2e'}},'Transaction History'),
+          txs.length===0?h('p',{style:{textAlign:'center',color:'#94a3b8',padding:40}},'No transactions yet.'):
+          h('div',{style:{display:'grid',gap:10}},txs.map(tx=>{
+            const isCredit=['opening','deposit'].includes(tx.type);
+            return h('div',{key:tx.id,style:{background:'#fff',borderRadius:12,padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',boxShadow:'0 1px 4px rgba(0,0,0,0.05)'}},
+              h('div',null,
+                h('div',{style:{fontWeight:600,fontSize:14,color:'#1a1a2e'}},tx.type.charAt(0).toUpperCase()+tx.type.slice(1)),
+                h('div',{style:{fontSize:11,color:'#94a3b8',marginTop:2}},tx.ref+' · '+fmtDate(tx.created_at))
+              ),
+              h('div',{style:{fontWeight:700,fontSize:15,color:isCredit?'#059669':'#dc2626'}},(isCredit?'+':'-')+fmt(tx.amount))
+            );
+          }))
+        ),
+        tab==='payouts'&&h('div',null,
+          h('h2',{style:{margin:'0 0 16px',fontSize:18,fontWeight:700,color:'#1a1a2e'}},'Payouts'),
+          disbursements.length===0?h('p',{style:{textAlign:'center',color:'#94a3b8',padding:40}},'No payout requests yet.'):
+          h('div',{style:{display:'grid',gap:10}},disbursements.map(d=>
+            h('div',{key:d.id,style:{background:'#fff',borderRadius:12,padding:'14px 16px',boxShadow:'0 1px 4px rgba(0,0,0,0.05)'}},
+              h('div',{style:{display:'flex',justifyContent:'space-between'}},
+                h('div',null,h('div',{style:{fontWeight:700,fontSize:16}},fmt(d.amount)),h('div',{style:{fontSize:12,color:'#64748b'}},d.type+' · '+fmtDate(d.requested_at))),
+                h('span',{style:{background:'#fef3c7',color:'#d97706',padding:'3px 10px',borderRadius:20,fontSize:11,fontWeight:600}},d.status)
+              )
+            )
+          ))
+        ),
+        tab==='profile'&&h('div',null,
+          h('div',{style:{background:'#fff',borderRadius:16,padding:24,boxShadow:'0 1px 8px rgba(0,0,0,0.06)'}},
+            h('div',{style:{display:'flex',alignItems:'center',gap:14,marginBottom:20}},
+              h('div',{style:{width:56,height:56,background:'#1a1a2e',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,fontWeight:700,color:'#fff'}},init),
+              h('div',null,h('div',{style:{fontWeight:700,fontSize:18,color:'#1a1a2e'}},profile.first_name+' '+profile.last_name),h('div',{style:{fontSize:13,color:'#64748b'}},fmtPhone(profile.phone)))
+            ),
+            [['Email',profile.email||'—'],['Phone',fmtPhone(profile.phone)]].map(([l,v])=>
+              h('div',{key:l,style:{display:'flex',justifyContent:'space-between',fontSize:14,padding:'6px 0',borderBottom:'1px solid #f1f5f9'}},
+                h('span',{style:{color:'#64748b'}},l),h('span',{style:{fontWeight:600,color:'#1a1a2e'}},v)
+              )
+            )
+          )
+        )
+      ),
+      showNew&&h(NewPlanModal,{customerId:profile.id,onClose:()=>setShowNew(false),onSuccess:()=>{setShowNew(false);loadPlans();}})
+    );
+  }
+
+  function NewPlanModal({customerId,onClose,onSuccess}) {
+    const [form,setForm] = useState({name:'',frequency:'',target:'',contrib:'',opening:'',date:''});
+    const [err,setErr] = useState('');
+    const [loading,setLoading] = useState(false);
+    const set = (k,v) => setForm(p=>({...p,[k]:v}));
+
+    async function submit(e) {
+      e.preventDefault(); setErr('');
+      if(!form.name)return setErr('Plan name required.');
+      if(!form.frequency)return setErr('Select frequency.');
+      const tgt=parseFloat(form.target),contrib=parseFloat(form.contrib),opening=parseFloat(form.opening);
+      if(!tgt||tgt<=0)return setErr('Enter target amount.');
+      if(!contrib||contrib<=0)return setErr('Enter regular contribution.');
+      if(!opening||opening<=0)return setErr('Enter opening contribution.');
+      if(!form.date)return setErr('Select maturity date.');
+      if(new Date(form.date)<=new Date())return setErr('Maturity date must be in future.');
+      if(!db)return setErr('Not configured.');
+      setLoading(true);
+      try {
+        const {data:plan,error}=await db.from('plans').insert({customer_id:customerId,name:form.name.trim(),frequency:form.frequency,target_amount:tgt,regular_contribution:contrib,maturity_date:form.date,status:'active',milestone_shown:false}).select().single();
+        if(error||!plan)return setErr(error?.message||'Failed');
+        const ref=genRef();
+        await db.from('transactions').insert({ref,type:'opening',amount:opening,plan_id:plan.id,customer_id:customerId,agent_id:null,method:'Opening',notes:'Plan created: '+form.name,status:'confirmed'});
+        onSuccess();
+      } catch(e){setErr(e.message);}
+      finally{setLoading(false);}
+    }
+
+    return h('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:9000,display:'flex',alignItems:'center',justifyContent:'center',padding:20},onClick:e=>{if(e.target===e.currentTarget)onClose();}},
+      h('div',{style:{background:'#fff',borderRadius:16,padding:28,width:'100%',maxWidth:420,maxHeight:'90vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}},
+        h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}},
+          h('h3',{style:{margin:0,fontSize:18,fontWeight:700,color:'#1a1a2e'}},'New Savings Plan'),
+          h('button',{onClick:onClose,style:{background:'#f1f5f9',border:'none',width:30,height:30,borderRadius:'50%',cursor:'pointer',fontSize:16}},'×')
+        ),
+        h('form',{onSubmit:submit},
+          [['Plan Name','name','text','e.g. Christmas Savings',''],['Frequency','frequency','select','',''],['Target (₦)','target','number','100000',''],['Regular Contribution (₦)','contrib','number','5000',''],['Opening Contribution (₦)','opening','number','10000',''],['Maturity Date','date','date','',new Date().toISOString().split('T')[0]]].map(([label,key,type,ph,min])=>
+            h('div',{key:key,style:{marginBottom:14}},
+              h('label',{style:S.label},label),
+              type==='select'
+                ?h('select',{value:form[key],onChange:e=>set(key,e.target.value),style:S.input},
+                    h('option',{value:''},'Select…'),
+                    ['Daily','Weekly','Monthly'].map(f=>h('option',{key:f,value:f},f))
+                  )
+                :h('input',{type,value:form[key],onChange:e=>set(key,e.target.value),placeholder:ph,min:min||undefined,style:S.input})
+            )
+          ),
+          err&&h('div',{style:S.err},err),
+          h('button',{type:'submit',disabled:loading,style:S.btn(loading?'#94a3b8':'#1a1a2e')},loading?'Creating…':'Create Plan')
+        )
+      )
+    );
+  }
+
+  // ═══════════════════════════════════════════════════
+  // REPRESENTATIVE DASHBOARD
+  // ═══════════════════════════════════════════════════
+  function RepDashboard({profile,onLogout}) {
+    const [tab,setTab]         = useState('search');
+    const [query,setQuery]     = useState('');
+    const [cust,setCust]       = useState(null);
+    const [custPlans,setCustPlans] = useState([]);
+    const [disbPending,setDisbPending] = useState([]);
+    const [searching,setSearching] = useState(false);
+    const [notFound,setNotFound]   = useState(false);
+    const [collStep,setCollStep]   = useState('search');
+    const [collPlan,setCollPlan]   = useState(null);
+    const [amount,setAmount]   = useState('');
+    const [method,setMethod]   = useState('Cash');
+    const [receipt,setReceipt] = useState(null);
+    const [actionMsg,setActionMsg] = useState('');
+    const [history,setHistory] = useState([]);
+
+    async function searchCust() {
+      if(!query.trim()||!db)return;
+      setSearching(true); setNotFound(false); setCust(null); setActionMsg('');
+      const norm = normPhone(query);
+      const {data}=await db.from('customers').select('id,first_name,last_name,phone,email,is_active').eq('phone',norm).single();
+      if(!data){setNotFound(true);setSearching(false);return;}
+      setCust(data);
+      const {data:plans}=await db.from('plan_balances').select('*').eq('customer_id',data.id).neq('status','deleted');
+      setCustPlans(plans||[]);
+      const {data:disbs}=await db.from('pending_disbursements').select('*').eq('customer_id',data.id).eq('status','pending');
+      setDisbPending(disbs||[]);
+      setSearching(false);
+    }
+
+    async function confirmCollection() {
+      if(!collPlan||!amount||!db)return;
+      const amt=parseFloat(amount);
+      if(!amt||amt<=0)return;
+      const ref=genRef();
+      const {error}=await db.from('transactions').insert({ref,type:'deposit',amount:amt,plan_id:collPlan.plan_id,customer_id:cust.id,agent_id:profile.id,method,notes:null,status:'confirmed'});
+      if(error){setActionMsg('❌ '+error.message);return;}
+      await db.from('representatives').update({confirmed_count:(profile.confirmed_count||0)+1}).eq('id',profile.id);
+      const {data:updated}=await db.from('plan_balances').select('balance,name').eq('plan_id',collPlan.plan_id).single();
+      setReceipt({ref,amount:amt,plan_name:updated?.name||collPlan.name,customer_name:cust.first_name+' '+cust.last_name,new_balance:Number(updated?.balance||0),method});
+      setCollStep('receipt');
+    }
+
+    async function approveDisb(d) {
+      if(!db)return;
+      const ref='WAG-PAY-'+d.id.substring(0,8).toUpperCase();
+      const {error}=await db.from('disbursements').update({status:'paid',confirmed_by:profile.id,confirmed_at:new Date().toISOString()}).eq('id',d.id);
+      if(error){setActionMsg('❌ '+error.message);return;}
+      await db.from('transactions').insert({ref,type:'payout',amount:d.amount,plan_id:d.plan_id,customer_id:d.customer_id,agent_id:profile.id,method:'Disbursement',notes:'Disbursement approved',status:'confirmed'});
+      setActionMsg('✅ Payout of '+fmt(d.amount)+' approved.');
+      setDisbPending(p=>p.filter(x=>x.id!==d.id));
+    }
+
+    async function loadHistory() {
+      if(!db)return;
+      const {data}=await db.from('transactions').select('*').eq('agent_id',profile.id).order('created_at',{ascending:false}).limit(50);
+      setHistory(data||[]);
+    }
+
+    useEffect(()=>{if(tab==='history')loadHistory();},[tab]);
+
+    const init=profile.first_name.charAt(0).toUpperCase();
+
+    return h('div',{style:{minHeight:'100vh',background:'#f0f4f8',fontFamily:'system-ui,sans-serif'}},
+      h('div',{style:{background:'linear-gradient(135deg,#1a1a2e,#16213e)',padding:'20px 20px 0',color:'#fff'}},
+        h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}},
+          h('div',{style:{display:'flex',alignItems:'center',gap:12}},
+            h('div',{style:{width:44,height:44,background:'rgba(255,255,255,0.15)',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,fontWeight:700}},init),
+            h('div',null,
+              h('div',{style:{fontSize:16,fontWeight:700}},profile.first_name+' '+profile.last_name),
+              h('div',{style:{fontSize:12,opacity:0.7}},'Agent ID: '+profile.rep_id)
+            )
+          ),
+          h('button',{onClick:onLogout,style:{background:'rgba(255,255,255,0.1)',border:'none',color:'#fff',width:36,height:36,borderRadius:'50%',cursor:'pointer',fontSize:16}},'🚪')
+        ),
+        h('div',{style:{display:'flex',gap:4}},
+          [['search','🔍','Search'],['collect','✍️','Collect'],['history','📋','History']].map(([t,icon,label])=>
+            h('button',{key:t,onClick:()=>setTab(t),style:{padding:'10px 14px',border:'none',cursor:'pointer',fontWeight:600,fontSize:12,borderRadius:'8px 8px 0 0',background:tab===t?'#fff':'transparent',color:tab===t?'#1a1a2e':'rgba(255,255,255,0.75)'}},icon+' '+label)
+          )
+        )
+      ),
+      h('div',{style:{padding:20}},
+        tab==='search'&&h('div',null,
+          h('h2',{style:{margin:'0 0 16px',fontSize:18,fontWeight:700,color:'#1a1a2e'}},'Customer Search'),
+          h('div',{style:{display:'flex',gap:8,marginBottom:16}},
+            h('input',{value:query,onChange:e=>setQuery(e.target.value),onKeyDown:e=>e.key==='Enter'&&searchCust(),placeholder:'Enter customer phone…',style:{...S.input,flex:1}}),
+            h('button',{onClick:searchCust,disabled:searching,style:{padding:'12px 20px',background:'#1a1a2e',color:'#fff',border:'none',borderRadius:10,fontWeight:600,cursor:'pointer',fontSize:14}},searching?'…':'Search')
+          ),
+          notFound&&h('div',{style:{background:'#fef9c3',color:'#92400e',padding:'10px 14px',borderRadius:8,fontSize:13,marginBottom:14}},'Customer not found. Try their full phone number.'),
+          actionMsg&&h('div',{style:{background:actionMsg.startsWith('✅')?'#f0fdf4':'#fef2f2',color:actionMsg.startsWith('✅')?'#059669':'#dc2626',padding:'10px 14px',borderRadius:8,fontSize:13,marginBottom:14}},actionMsg),
+          cust&&h('div',null,
+            h('div',{style:{background:'#fff',borderRadius:16,padding:20,marginBottom:14,boxShadow:'0 2px 10px rgba(0,0,0,0.06)'}},
+              h('div',{style:{fontWeight:700,fontSize:17,color:'#1a1a2e',marginBottom:4}},cust.first_name+' '+cust.last_name),
+              h('div',{style:{fontSize:13,color:'#64748b'}},fmtPhone(cust.phone)),
+              h('div',{style:{fontSize:13,color:'#64748b'}},cust.email||''),
+              h('div',{style:{marginTop:12}},
+                h('div',{style:{fontSize:12,fontWeight:600,color:'#94a3b8',marginBottom:8}},'SAVINGS PLANS'),
+                custPlans.length===0?h('p',{style:{fontSize:13,color:'#94a3b8'}},'No active plans.'):
+                custPlans.map(p=>h('div',{key:p.plan_id,style:{display:'flex',justifyContent:'space-between',fontSize:13,padding:'6px 0',borderBottom:'1px solid #f1f5f9'}},
+                  h('span',{style:{fontWeight:600}},p.name),h('span',{style:{color:'#059669',fontWeight:700}},fmt(p.balance))
+                ))
+              )
+            ),
+            disbPending.length>0&&h('div',null,
+              h('div',{style:{fontSize:14,fontWeight:700,color:'#1a1a2e',marginBottom:10}},'Pending Payout Requests'),
+              disbPending.map(d=>h('div',{key:d.id,style:{background:'#fff',borderRadius:12,padding:16,marginBottom:10,border:'1px solid #fef3c7'}},
+                h('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:8}},
+                  h('div',null,h('div',{style:{fontWeight:700,fontSize:16}},fmt(d.amount)),h('div',{style:{fontSize:12,color:'#64748b'}},d.type+' · '+fmtDate(d.requested_at))),
+                  h('span',{style:{background:'#fef3c7',color:'#d97706',padding:'3px 10px',borderRadius:20,fontSize:11,fontWeight:600}},'Pending')
+                ),
+                d.reason&&h('div',{style:{fontSize:12,color:'#64748b',fontStyle:'italic',marginBottom:10}},'"'+d.reason+'"'),
+                h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}},
+                  h('button',{onClick:()=>approveDisb(d),style:{padding:'10px 0',background:'#059669',color:'#fff',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:13}},'✅ Approve'),
+                  h('button',{onClick:async()=>{await db.from('disbursements').update({status:'rejected'}).eq('id',d.id);setDisbPending(p=>p.filter(x=>x.id!==d.id));setActionMsg('Rejected.');},style:{padding:'10px 0',background:'#fef2f2',color:'#dc2626',border:'1px solid #fecaca',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:13}},'❌ Reject')
+                )
+              ))
+            )
+          )
+        ),
+        tab==='collect'&&h('div',null,
+          h('h2',{style:{margin:'0 0 16px',fontSize:18,fontWeight:700,color:'#1a1a2e'}},'Record Collection'),
+          h('div',{style:{background:'#fff',borderRadius:16,padding:24,boxShadow:'0 2px 10px rgba(0,0,0,0.06)'}},
+            collStep==='receipt'&&receipt?h('div',{style:{textAlign:'center'}},
+              h('div',{style:{fontSize:56,marginBottom:12}},'✅'),
+              h('h3',{style:{margin:'0 0 4px',fontSize:20,fontWeight:800,color:'#059669'}},'Collected!'),
+              h('p',{style:{color:'#64748b',marginBottom:20}},'Ref: '+receipt.ref),
+              [['Amount',fmt(receipt.amount)],['Plan',receipt.plan_name],['Customer',receipt.customer_name],['New Balance',fmt(receipt.new_balance)],['Method',receipt.method]].map(([l,v])=>
+                h('div',{key:l,style:{display:'flex',justifyContent:'space-between',padding:'6px 0',fontSize:14}},h('span',{style:{color:'#64748b'}},l),h('span',{style:{fontWeight:600}},v))
+              ),
+              h('button',{onClick:()=>{setCollStep('search');setCust(null);setReceipt(null);setAmount('');},style:{...S.btn(),marginTop:20,width:'auto',padding:'10px 24px'}},'Record Another')
+            ):
+            collStep==='plan'&&cust?h('div',null,
+              h('div',{style:{background:'#f8fafc',borderRadius:10,padding:'10px 14px',marginBottom:16,fontSize:14,fontWeight:600,color:'#1a1a2e'}},cust.first_name+' '+cust.last_name),
+              h('div',{style:{fontSize:13,fontWeight:600,color:'#94a3b8',marginBottom:10}},'SELECT PLAN'),
+              custPlans.filter(p=>p.status==='active').map(p=>h('button',{key:p.plan_id,onClick:()=>{setCollPlan(p);setCollStep('amount');},style:{display:'block',width:'100%',background:'#f8fafc',border:'2px solid #e2e8f0',borderRadius:12,padding:16,textAlign:'left',cursor:'pointer',marginBottom:10}},
+                h('div',{style:{fontWeight:700,fontSize:15,color:'#1a1a2e',marginBottom:4}},p.name),
+                h('div',{style:{fontSize:13,color:'#64748b'}},'Balance: '+fmt(p.balance)+' · Target: '+fmt(p.target_amount))
+              )),
+              h('button',{onClick:()=>setCollStep('search'),style:{marginTop:8,padding:'8px 16px',background:'#f1f5f9',color:'#475569',border:'none',borderRadius:8,cursor:'pointer',fontWeight:600}},'← Back')
+            ):
+            collStep==='amount'&&collPlan?h('div',null,
+              h('div',{style:{background:'#eff6ff',borderRadius:10,padding:'10px 14px',marginBottom:16}},
+                h('div',{style:{fontWeight:600,fontSize:14,color:'#1a1a2e'}},collPlan.name),
+                h('div',{style:{fontSize:12,color:'#2563eb',marginTop:2}},'Balance: '+fmt(collPlan.balance))
+              ),
+              h('label',{style:S.label},'Amount (₦)'),
+              h('input',{type:'number',value:amount,onChange:e=>setAmount(e.target.value),placeholder:'0',min:'1',style:{...S.input,fontSize:20,fontWeight:700,marginBottom:14}}),
+              h('label',{style:S.label},'Method'),
+              h('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:16}},
+                ['Cash','Bank Transfer','Mobile Money'].map(m=>h('button',{key:m,type:'button',onClick:()=>setMethod(m),style:{padding:'8px 0',border:'2px solid '+(method===m?'#1a1a2e':'#e2e8f0'),borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:12,background:method===m?'#1a1a2e':'#fff',color:method===m?'#fff':'#64748b'}},m))
+              ),
+              h('div',{style:{display:'flex',gap:8}},
+                h('button',{onClick:confirmCollection,disabled:!amount,style:{...S.btn(),flex:2,width:'auto'}},'✅ Confirm'),
+                h('button',{onClick:()=>setCollStep('plan'),style:{flex:1,padding:12,background:'#f1f5f9',color:'#475569',border:'none',borderRadius:8,cursor:'pointer',fontWeight:600}},'← Back')
+              )
+            ):
+            h('div',null,
+              h('label',{style:{...S.label,marginBottom:8}},'Customer Phone'),
+              h('div',{style:{display:'flex',gap:8,marginBottom:16}},
+                h('input',{value:query,onChange:e=>setQuery(e.target.value),placeholder:'07012345678',style:{...S.input,flex:1}}),
+                h('button',{onClick:async()=>{
+                  if(!query.trim()||!db)return;
+                  const norm=normPhone(query);
+                  const {data}=await db.from('customers').select('id,first_name,last_name,phone,is_active').eq('phone',norm).single();
+                  if(!data){setActionMsg('Customer not found.');return;}
+                  setCust(data);
+                  const {data:plans}=await db.from('plan_balances').select('*').eq('customer_id',data.id).eq('status','active');
+                  setCustPlans(plans||[]);
+                  setCollStep('plan');
+                },style:{padding:'12px 20px',background:'#1a1a2e',color:'#fff',border:'none',borderRadius:10,fontWeight:600,cursor:'pointer',fontSize:14}},'Find')
+              ),
+              actionMsg&&h('div',{style:{background:'#fef2f2',color:'#dc2626',padding:'10px 14px',borderRadius:8,fontSize:13}},actionMsg)
+            )
+          )
+        ),
+        tab==='history'&&h('div',null,
+          h('h2',{style:{margin:'0 0 16px',fontSize:18,fontWeight:700,color:'#1a1a2e'}},'Collection History'),
+          history.length===0?h('p',{style:{textAlign:'center',color:'#94a3b8',padding:40}},'No collections yet.'):
+          h('div',{style:{display:'grid',gap:10}},history.map(tx=>
+            h('div',{key:tx.id,style:{background:'#fff',borderRadius:12,padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',boxShadow:'0 1px 4px rgba(0,0,0,0.05)'}},
+              h('div',null,
+                h('div',{style:{fontWeight:600,fontSize:14,color:'#1a1a2e'}},tx.type.charAt(0).toUpperCase()+tx.type.slice(1)),
+                h('div',{style:{fontSize:11,color:'#94a3b8'}},tx.ref+' · '+fmtDate(tx.created_at))
+              ),
+              h('div',{style:{fontWeight:700,fontSize:15,color:'#059669'}},fmt(tx.amount))
+            )
+          ))
+        )
+      )
+    );
+  }
+
+  // ═══════════════════════════════════════════════════
+  // ADMIN DASHBOARD (simplified)
+  // ═══════════════════════════════════════════════════
+  function AdminDashboard({onLogout}) {
+    const [tab,setTab]   = useState('overview');
+    const [stats,setStats] = useState(null);
+    const [custs,setCusts] = useState([]);
+    const [reps,setReps]   = useState([]);
+    const [disbs,setDisbs] = useState([]);
+    const [audit,setAudit] = useState([]);
+    const [fraud,setFraud] = useState([]);
+    const [msg,setMsg]     = useState('');
+    const [tokenVal,setTokenVal] = useState('');
+
+    useEffect(()=>{
+      if(!db)return;
+      async function load(){
+        const [cr,rr,pr,tr,dr,fr] = await Promise.all([
+          db.from('customers').select('id',{count:'exact',head:true}).eq('is_active',true),
+          db.from('representatives').select('id',{count:'exact',head:true}).eq('is_active',true),
+          db.from('plans').select('id',{count:'exact',head:true}).eq('status','active'),
+          db.from('transactions').select('id',{count:'exact',head:true}).eq('status','confirmed'),
+          db.from('disbursements').select('id',{count:'exact',head:true}).eq('status','pending'),
+          db.from('fraud_flags').select('id',{count:'exact',head:true}).eq('resolved',false),
+        ]);
+        setStats({customers:cr.count||0,reps:rr.count||0,plans:pr.count||0,txs:tr.count||0,disbs:dr.count||0,fraud:fr.count||0});
+      }
+      load();
+    },[]);
+
+    async function loadTab(t){
+      setTab(t); setMsg('');
+      if(!db)return;
+      if(t==='customers'){const {data}=await db.from('customers').select('id,first_name,last_name,phone,email,is_active,created_at').order('created_at',{ascending:false}).limit(100);setCusts(data||[]);}
+      if(t==='reps'){const {data}=await db.from('representatives').select('id,first_name,last_name,phone,rep_id,confirmed_count,is_active,created_at').order('created_at',{ascending:false}).limit(100);setReps(data||[]);}
+      if(t==='disbursements'){const {data}=await db.from('pending_disbursements').select('*').order('requested_at',{ascending:false});setDisbs(data||[]);}
+      if(t==='audit'){const {data}=await db.from('audit_log').select('*').order('created_at',{ascending:false}).limit(200);setAudit(data||[]);}
+      if(t==='fraud'){const {data}=await db.from('fraud_flags').select('*').eq('resolved',false).order('created_at',{ascending:false});setFraud(data||[]);}
+    }
+
+    async function genToken(){
+      if(!db)return;
+      const chars='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let token='WAGE-';
+      for(let i=0;i<8;i++)token+=chars[Math.floor(Math.random()*chars.length)];
+      await db.from('activation_tokens').insert({token,generated_by:'admin',expires_at:new Date(Date.now()+7*86400000).toISOString()});
+      setTokenVal(token);
+      setMsg('Token generated: '+token);
+    }
+
+    async function approveDisb(d){
+      if(!db)return;
+      const ref='WAG-PAY-'+d.id.substring(0,8).toUpperCase();
+      await db.from('disbursements').update({status:'paid',confirmed_by:'admin',confirmed_at:new Date().toISOString()}).eq('id',d.id);
+      await db.from('transactions').insert({ref,type:'payout',amount:d.amount,plan_id:d.plan_id,customer_id:d.customer_id,agent_id:null,method:'Disbursement',notes:'Admin approved',status:'confirmed'});
+      setMsg('✅ Approved '+fmt(d.amount));
+      setDisbs(p=>p.filter(x=>x.id!==d.id));
+    }
+
+    const navTabs=[['overview','📊','Overview'],['customers','👥','Customers'],['reps','🧑‍💼','Reps'],['disbursements','💸','Payouts'],['audit','📋','Audit'],['fraud','🚨','Fraud']];
+
+    return h('div',{style:{minHeight:'100vh',background:'#f0f4f8',fontFamily:'system-ui,sans-serif'}},
+      h('div',{style:{background:'linear-gradient(135deg,#1a1a2e,#16213e)',padding:'20px 20px 0',color:'#fff'}},
+        h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}},
+          h('div',null,h('div',{style:{fontSize:18,fontWeight:800}},'WAG Admin'),h('div',{style:{fontSize:12,opacity:0.7}},'Control Centre')),
+          h('button',{onClick:onLogout,style:{background:'rgba(255,255,255,0.1)',border:'none',color:'#fff',width:36,height:36,borderRadius:'50%',cursor:'pointer',fontSize:16}},'🚪')
+        ),
+        stats&&h('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:20}},
+          [['Customers',stats.customers,'#4ade80'],['Reps',stats.reps,undefined],['Plans',stats.plans,undefined],['Transactions',stats.txs,undefined],['Pending Payouts',stats.disbs,stats.disbs>0?'#fbbf24':undefined],['Fraud Flags',stats.fraud,stats.fraud>0?'#f87171':undefined]].map(([l,v,c])=>
+            h('div',{key:l,style:{background:'rgba(255,255,255,0.08)',borderRadius:10,padding:'10px 12px'}},
+              h('div',{style:{fontSize:10,opacity:0.7,marginBottom:3}},l),
+              h('div',{style:{fontSize:16,fontWeight:800,color:c||'#fff'}},v)
+            )
+          )
+        ),
+        h('div',{style:{display:'flex',gap:4,overflowX:'auto'}},
+          navTabs.map(([t,icon,label])=>h('button',{key:t,onClick:()=>loadTab(t),style:{padding:'9px 12px',border:'none',cursor:'pointer',fontWeight:600,fontSize:11,borderRadius:'8px 8px 0 0',whiteSpace:'nowrap',background:tab===t?'#fff':'transparent',color:tab===t?'#1a1a2e':'rgba(255,255,255,0.75)'}},icon+' '+label))
+        )
+      ),
+      h('div',{style:{padding:20}},
+        msg&&h('div',{style:{background:'#f0fdf4',color:'#059669',padding:'10px 14px',borderRadius:8,marginBottom:14,fontSize:13,border:'1px solid #bbf7d0'}},msg),
+        tab==='overview'&&h('div',null,
+          h('h2',{style:{margin:'0 0 16px',fontSize:18,fontWeight:700,color:'#1a1a2e'}},'System Overview'),
+          h('div',{style:{display:'flex',gap:8,flexWrap:'wrap'}},
+            h('button',{onClick:genToken,style:{padding:'10px 16px',background:'#1a1a2e',color:'#fff',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:13}},'+ Generate Activation Token'),
+          ),
+          tokenVal&&h('div',{style:{background:'#f0fdf4',border:'2px solid #059669',borderRadius:12,padding:20,marginTop:16,textAlign:'center'}},
+            h('div',{style:{fontSize:13,color:'#059669',fontWeight:600,marginBottom:8}},'New Token Generated'),
+            h('div',{style:{fontFamily:'monospace',fontSize:24,fontWeight:800,letterSpacing:4,color:'#1a1a2e'}},tokenVal),
+            h('p',{style:{fontSize:12,color:'#64748b',margin:'8px 0 0'}},'Expires in 7 days. Share with new representative.')
+          )
+        ),
+        tab==='customers'&&h('div',null,
+          h('h2',{style:{margin:'0 0 16px',fontSize:18,fontWeight:700,color:'#1a1a2e'}},'Customers ('+custs.length+')'),
+          h('div',{style:{display:'grid',gap:10}},custs.map(c=>
+            h('div',{key:c.id,style:{background:'#fff',borderRadius:12,padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',boxShadow:'0 1px 4px rgba(0,0,0,0.05)'}},
+              h('div',null,h('div',{style:{fontWeight:600,fontSize:14,color:'#1a1a2e'}},c.first_name+' '+c.last_name),h('div',{style:{fontSize:12,color:'#64748b'}},fmtPhone(c.phone))),
+              h('span',{style:{background:c.is_active?'#dcfce7':'#fee2e2',color:c.is_active?'#059669':'#dc2626',padding:'3px 8px',borderRadius:12,fontSize:11,fontWeight:700}},c.is_active?'Active':'Inactive')
+            )
+          ))
+        ),
+        tab==='reps'&&h('div',null,
+          h('h2',{style:{margin:'0 0 16px',fontSize:18,fontWeight:700,color:'#1a1a2e'}},'Representatives ('+reps.length+')'),
+          h('div',{style:{display:'grid',gap:10}},reps.map(r=>
+            h('div',{key:r.id,style:{background:'#fff',borderRadius:12,padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',boxShadow:'0 1px 4px rgba(0,0,0,0.05)'}},
+              h('div',null,h('div',{style:{fontWeight:600,fontSize:14,color:'#1a1a2e'}},r.first_name+' '+r.last_name),h('div',{style:{fontSize:12,color:'#64748b'}},'Agent '+r.rep_id+' · '+r.confirmed_count+' collections')),
+              h('span',{style:{background:r.is_active?'#dcfce7':'#fee2e2',color:r.is_active?'#059669':'#dc2626',padding:'3px 8px',borderRadius:12,fontSize:11,fontWeight:700}},r.is_active?'Active':'Inactive')
+            )
+          ))
+        ),
+        tab==='disbursements'&&h('div',null,
+          h('h2',{style:{margin:'0 0 16px',fontSize:18,fontWeight:700,color:'#1a1a2e'}},'Pending Payouts ('+disbs.length+')'),
+          disbs.length===0?h('p',{style:{textAlign:'center',color:'#94a3b8',padding:40}},'No pending payouts.'):
+          h('div',{style:{display:'grid',gap:12}},disbs.map(d=>
+            h('div',{key:d.id,style:{background:'#fff',borderRadius:14,padding:'18px 20px',boxShadow:'0 2px 10px rgba(0,0,0,0.06)'}},
+              h('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:10}},
+                h('div',null,
+                  h('div',{style:{fontWeight:800,fontSize:18,color:'#1a1a2e'}},fmt(d.amount)),
+                  h('div',{style:{fontSize:13,color:'#64748b'}},(d.customer_first_name||'?')+' '+(d.customer_last_name||'')+' · '+(d.plan_name||'?')),
+                  h('div',{style:{fontSize:12,color:'#94a3b8'}},d.type+' · '+fmtDate(d.requested_at))
+                )
+              ),
+              d.reason&&h('div',{style:{fontSize:12,fontStyle:'italic',color:'#64748b',marginBottom:10}},'"'+d.reason+'"'),
+              h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}},
+                h('button',{onClick:()=>approveDisb(d),style:{padding:'10px 0',background:'#059669',color:'#fff',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:13}},'✅ Approve'),
+                h('button',{onClick:async()=>{await db.from('disbursements').update({status:'rejected'}).eq('id',d.id);setDisbs(p=>p.filter(x=>x.id!==d.id));setMsg('Rejected.');},style:{padding:'10px 0',background:'#fef2f2',color:'#dc2626',border:'1px solid #fecaca',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:13}},'❌ Reject')
+              )
+            )
+          ))
+        ),
+        tab==='audit'&&h('div',null,
+          h('h2',{style:{margin:'0 0 16px',fontSize:18,fontWeight:700,color:'#1a1a2e'}},'Audit Log'),
+          h('div',{style:{display:'grid',gap:8}},audit.map(log=>
+            h('div',{key:log.id,style:{background:'#fff',borderRadius:10,padding:'12px 14px',boxShadow:'0 1px 3px rgba(0,0,0,0.04)'}},
+              h('div',{style:{fontWeight:600,fontSize:13,color:'#1a1a2e'}},log.action),
+              h('div',{style:{fontSize:12,color:'#64748b',marginTop:2}},log.description),
+              h('div',{style:{fontSize:11,color:'#94a3b8',marginTop:3}},log.user_role+' · '+fmtDate(log.created_at))
+            )
+          ))
+        ),
+        tab==='fraud'&&h('div',null,
+          h('h2',{style:{margin:'0 0 16px',fontSize:18,fontWeight:700,color:'#1a1a2e'}},'Fraud Flags ('+fraud.length+' unresolved)'),
+          fraud.length===0?h('p',{style:{textAlign:'center',color:'#94a3b8',padding:40}},'No unresolved flags 🎉'):
+          h('div',{style:{display:'grid',gap:10}},fraud.map(f=>
+            h('div',{key:f.id,style:{background:'#fff',borderRadius:12,padding:'14px 16px',boxShadow:'0 1px 4px rgba(0,0,0,0.05)',border:'1px solid '+(f.severity==='high'?'#fee2e2':f.severity==='medium'?'#fef3c7':'#dbeafe')}},
+              h('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:6}},
+                h('span',{style:{background:f.severity==='high'?'#fee2e2':f.severity==='medium'?'#fef3c7':'#dbeafe',color:f.severity==='high'?'#dc2626':f.severity==='medium'?'#d97706':'#2563eb',padding:'3px 10px',borderRadius:20,fontSize:11,fontWeight:700}},f.severity.toUpperCase()),
+                h('span',{style:{fontSize:11,color:'#94a3b8'}},fmtDate(f.created_at))
+              ),
+              h('div',{style:{fontWeight:600,fontSize:14,color:'#1a1a2e',marginBottom:4}},f.type),
+              h('div',{style:{fontSize:13,color:'#64748b',marginBottom:10}},f.description),
+              h('button',{onClick:async()=>{await db.from('fraud_flags').update({resolved:true}).eq('id',f.id);setFraud(p=>p.filter(x=>x.id!==f.id));},style:{padding:'7px 14px',background:'#f1f5f9',color:'#475569',border:'none',borderRadius:6,fontWeight:600,cursor:'pointer',fontSize:12}},'Mark Resolved')
+            )
+          ))
+        )
+      )
+    );
+  }
+
+  // ═══════════════════════════════════════════════════
+  // ROOT APP
+  // ═══════════════════════════════════════════════════
+  function App() {
+    const [view, setView] = useState('boot');
+    const [session, setSession] = useState(null);
+    const [registerSuccess, setRegisterSuccess] = useState(false);
+
+    useEffect(()=>{
+      const s = getSession();
+      setView(s ? 'app' : 'login');
+      setSession(s);
+    },[]);
+
+    useEffect(()=>{
+      const showReg    = ()=>setView('register');
+      const showRepReg = ()=>setView('rep-register');
+      window.addEventListener('wag:register',    showReg);
+      window.addEventListener('wag:rep-register',showRepReg);
+      return ()=>{
+        window.removeEventListener('wag:register',    showReg);
+        window.removeEventListener('wag:rep-register',showRepReg);
+      };
+    },[]);
+
+    function handleLogin(){
+      const s = getSession();
+      setSession(s);
+      setView('app');
+    }
+
+    function handleLogout(){
+      clearSess();
+      setSession(null);
+      setView('login');
+    }
+
+    if(view==='boot') return h('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh',background:'#1a1a2e'}},
+      h('div',{style:{textAlign:'center',color:'#fff'}},
+        h('div',{style:{width:56,height:56,border:'4px solid rgba(255,255,255,0.2)',borderTopColor:'#fff',borderRadius:'50%',animation:'spin 0.8s linear infinite',margin:'0 auto 16px'}}),
+        h('p',{style:{fontWeight:500,opacity:0.8}},'Loading WAG Platform…')
+      ),
+      h('style',null,'@keyframes spin{to{transform:rotate(360deg)}}')
+    );
+
+    if(view==='register') return h(Register,{onBack:()=>setView('login'),onSuccess:()=>{setRegisterSuccess(true);setView('login');}});
+
+    if(view==='login') return h('div',null,
+      registerSuccess&&h('div',{style:{background:'#059669',color:'#fff',padding:'10px 20px',textAlign:'center',fontSize:13,fontWeight:600}},'✅ Account created! Sign in to continue.'),
+      h(Login,{onLogin:handleLogin})
+    );
+
+    if(!session) return h(Login,{onLogin:handleLogin});
+
+    if(session.role==='customer') return h(CustomerDashboard,{profile:session.profile,onLogout:handleLogout});
+    if(session.role==='representative') return h(RepDashboard,{profile:session.profile,onLogout:handleLogout});
+    if(session.role==='admin') return h(AdminDashboard,{onLogout:handleLogout});
+
+    return h(Login,{onLogin:handleLogin});
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(h(App,null));
+  </script>
+</body>
+</html>
