@@ -32,4 +32,15 @@
   <div id="root"></div>
   <script type="module" src="./src/main.tsx"></script>
 </body>
+  <div id="error-display" style="padding:20px;font-family:monospace;font-size:13px;color:red;"></div>
+<script>
+window.onerror = function(msg, src, line, col, err) {
+  document.getElementById('error-display').innerHTML = 
+    '<b>ERROR:</b> ' + msg + '<br>Line: ' + line + '<br>' + (err ? err.stack : '');
+};
+window.addEventListener('unhandledrejection', function(e) {
+  document.getElementById('error-display').innerHTML += 
+    '<br><b>PROMISE ERROR:</b> ' + e.reason;
+});
+</script>
 </html>
