@@ -90,12 +90,12 @@
           saveSession({user_id:data.id,role:'representative',profile:{...data,role:'representative'},pin_verified:true});
           onLogin();
         } else {
-          // Admin - calls edge function
-          const {data,error} = await db.functions.invoke('verify-admin-pin',{body:{pin}});
-          if (error||!data?.valid) { setErr('Invalid admin PIN.'); return; }
-          saveSession({user_id:'admin',role:'admin',profile:data.admin,pin_verified:true});
-          onLogin();
-        }
+  const pinHash = await hashPin(pin);
+  const ADMIN_HASH = '334a37693e84181db258d9c0348036362e867cbe4ea63ffa9e76284376a39a81';
+  if (pinHash !== ADMIN_HASH) { setErr('Invalid admin PIN.'); return; }
+  saveSession({user_id:'admin',role:'admin',profile:{id:'admin',email:'admin@wag.ng',full_name:'WAG Administrator',role:'admin'},pin_verified:true});
+  onLogin();
+}
       } catch(e) { setErr(e.message||'Login failed.'); }
       finally { setLoading(false); setPin(''); }
     }
