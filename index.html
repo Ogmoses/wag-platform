@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="WAG Enterprises — Thrift Collection Platform" />
+  <meta name="theme-color" content="#1a1a2e" />
+
+  <!-- GitHub Pages SPA redirect fix -->
+  <script>
+    (function(l) {
+      if (l.search[1] === '/') {
+        var decoded = l.search.slice(1).split('&').map(function(s) {
+          return s.replace(/~and~/g, '&');
+        }).join('?');
+        window.history.replaceState(null, null,
+          l.pathname.slice(0, -1) + decoded + l.hash
+        );
+      }
+    }(window.location));
+  </script>
+
+  <title>WAG Enterprises</title>
+
+  <!-- Favicon: inline SVG as data URI -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231a1a2e'/><text x='16' y='23' text-anchor='middle' font-size='20' font-weight='800' font-family='system-ui' fill='white'>W</text></svg>" />
+
+  <!-- Preconnect to Supabase for faster first request -->
+  <link rel="preconnect" href="https://supabase.co" />
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="./src/main.tsx"></script>
+</body>
+</html>
